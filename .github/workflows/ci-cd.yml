@@ -59,7 +59,7 @@ jobs:
     name: Risk Analysis Gate
     runs-on: ubuntu-latest
     needs: build-and-test
-    if: false 
+    
 
     steps:
       - name: Download pipeline logs

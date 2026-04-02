@@ -59,7 +59,6 @@ jobs:
     name: Risk Analysis Gate
     runs-on: ubuntu-latest
     needs: build-and-test
-    
 
     steps:
       - name: Download pipeline logs
@@ -71,7 +70,7 @@ jobs:
       - name: Send logs to predictor & evaluate risk
         id: risk-check
         run: |
-          LOGS=$(cat /tmp/pipeline-logs/full-pipeline.log | head -500)
+          LOGS=$(tail -c 10000 /tmp/pipeline-logs/full-pipeline.log)
 
           RESPONSE=$(curl -s -X POST "${{ env.PREDICTOR_URL }}/analyze" \
             -H "Content-Type: application/json" \

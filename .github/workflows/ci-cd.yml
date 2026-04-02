@@ -67,6 +67,19 @@ jobs:
           name: pipeline-logs-${{ github.run_id }}
           path: /tmp/pipeline-logs
 
+      - name: Wake up predictor (Render free tier)
+        run: |
+          echo "Pinging predictor to wake it up..."
+          for i in 1 2 3 4 5; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" ${{ env.PREDICTOR_URL }}/health)
+            echo "Attempt $i: HTTP $STATUS"
+            if [ "$STATUS" = "200" ]; then
+              echo "Predictor is awake!"
+              break
+            fi
+            sleep 15
+          done
+
       - name: Send logs to predictor & evaluate risk
         id: risk-check
         run: |

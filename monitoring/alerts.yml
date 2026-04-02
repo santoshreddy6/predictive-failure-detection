@@ -1,0 +1,20 @@
+groups:
+  - name: predictive_failure_alerts
+    rules:
+      - alert: PredictorServiceDown
+        expr: up{job="predictor"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Predictor service is DOWN"
+          description: "The predictive failure detection service has been unreachable for 1 minute."
+
+      - alert: SampleAppDown
+        expr: up{job="sample-app"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Sample application is DOWN"
+          description: "The sample application has been unreachable for 2 minutes."

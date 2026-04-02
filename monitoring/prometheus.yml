@@ -1,0 +1,26 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+rule_files:
+  - "alerts.yml"
+
+scrape_configs:
+  - job_name: "predictor"
+    static_configs:
+      - targets: ["predictor:8000"]
+    metrics_path: "/metrics"
+
+  - job_name: "sample-app"
+    static_configs:
+      - targets: ["sample-app:8080"]
+    metrics_path: "/metrics"
+
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]

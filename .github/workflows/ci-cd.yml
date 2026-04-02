@@ -1,0 +1,142 @@
+name: CI/CD with Predictive Failure Detection
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main, master]
+
+env:
+  PREDICTOR_URL: ${{ secrets.PREDICTOR_URL || 'http://localhost:8000' }}
+
+jobs:
+  # ── Stage 1: Build & Test ──────────────────────────────────────────────────
+  build-and-test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    outputs:
+      log_artifact: ${{ steps.set-artifact.outputs.name }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r sample-app/requirements.txt 2>&1 | tee /tmp/install.log
+
+      - name: Run tests
+        id: run-tests
+        run: |
+          cd sample-app
+          python -m pytest tests/ -v 2>&1 | tee /tmp/test.log || true
+
+      - name: Build Docker image
+        run: |
+          docker build -t sample-app:${{ github.sha }} ./sample-app 2>&1 | tee /tmp/docker-build.log || true
+
+      - name: Collect all logs
+        id: set-artifact
+        run: |
+          mkdir -p /tmp/pipeline-logs
+          cat /tmp/install.log /tmp/test.log /tmp/docker-build.log > /tmp/pipeline-logs/full-pipeline.log 2>/dev/null || true
+          echo "name=pipeline-logs-${{ github.run_id }}" >> $GITHUB_OUTPUT
+
+      - name: Upload logs artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-logs-${{ github.run_id }}
+          path: /tmp/pipeline-logs/full-pipeline.log
+          retention-days: 3
+
+  # ── Stage 2: Risk Analysis Gate ───────────────────────────────────────────
+  risk-analysis:
+    name: Risk Analysis Gate
+    runs-on: ubuntu-latest
+    needs: build-and-test
+
+    steps:
+      - name: Download pipeline logs
+        uses: actions/download-artifact@v4
+        with:
+          name: pipeline-logs-${{ github.run_id }}
+          path: /tmp/pipeline-logs
+
+      - name: Send logs to predictor & evaluate risk
+        id: risk-check
+        run: |
+          LOGS=$(cat /tmp/pipeline-logs/full-pipeline.log | head -500)
+
+          RESPONSE=$(curl -s -X POST "${{ env.PREDICTOR_URL }}/analyze" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n \
+              --arg logs "$LOGS" \
+              --arg pipeline_id "${{ github.run_id }}" \
+              --arg branch "${{ github.ref_name }}" \
+              --arg commit_sha "${{ github.sha }}" \
+              '{logs: $logs, pipeline_id: $pipeline_id, branch: $branch, commit_sha: $commit_sha}'
+            )")
+
+          echo "=== Predictor Response ==="
+          echo "$RESPONSE" | jq .
+
+          DECISION=$(echo "$RESPONSE" | jq -r '.decision')
+          SCORE=$(echo "$RESPONSE" | jq -r '.risk_score')
+          SUMMARY=$(echo "$RESPONSE" | jq -r '.summary')
+
+          echo "decision=$DECISION"   >> $GITHUB_OUTPUT
+          echo "score=$SCORE"         >> $GITHUB_OUTPUT
+          echo "summary=$SUMMARY"     >> $GITHUB_OUTPUT
+
+          echo "### 🔍 Risk Analysis Result" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |"           >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|"                   >> $GITHUB_STEP_SUMMARY
+          echo "| Decision | **$DECISION** |">> $GITHUB_STEP_SUMMARY
+          echo "| Risk Score | $SCORE / 100 |">> $GITHUB_STEP_SUMMARY
+          echo "| Summary | $SUMMARY |"      >> $GITHUB_STEP_SUMMARY
+
+          if [ "$DECISION" = "BLOCK" ]; then
+            echo "::error::Deployment BLOCKED. Risk score=$SCORE. $SUMMARY"
+            exit 1
+          elif [ "$DECISION" = "WARN" ]; then
+            echo "::warning::Deployment allowed with WARNING. Risk score=$SCORE. $SUMMARY"
+          else
+            echo "::notice::Deployment ALLOWED. Risk score=$SCORE. All clear."
+          fi
+
+      - name: Send Slack notification (on block)
+        if: failure()
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "text": "🚨 *Deployment BLOCKED* by Predictive Failure Detection\n*Repo:* ${{ github.repository }}\n*Branch:* ${{ github.ref_name }}\n*Commit:* ${{ github.sha }}\n*Score:* ${{ steps.risk-check.outputs.score }}/100\n*Reason:* ${{ steps.risk-check.outputs.summary }}"
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+        continue-on-error: true  # don't fail pipeline if Slack is not configured
+
+  # ── Stage 3: Deploy ──────────────────────────────────────────────────────
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    needs: [build-and-test, risk-analysis]
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy application
+        run: |
+          echo "✅ Risk gate passed. Deploying commit ${{ github.sha }} to production..."
+          # Replace this with your actual deploy command:
+          # docker push your-registry/sample-app:${{ github.sha }}
+          # kubectl set image deployment/app app=your-registry/sample-app:${{ github.sha }}
+          echo "Deployment complete."
